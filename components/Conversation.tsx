@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 // Fix: Import types from @google/genai
 import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAI_Blob, LiveSession, FunctionDeclaration, Type } from '@google/genai';
-import { AppStatus, TranscriptMessage, DevLogMessage } from '../types';
+import { AppStatus, TranscriptMessage, DevLogMessage, ToolCallStatus } from '../types';
 import { decode, encode, decodeAudioData } from '../utils/audioUtils';
 import {
   MicIcon,
@@ -14,12 +14,36 @@ import {
   CloseIcon,
   SettingsIcon,
   SaveIcon,
+  AutomationIcon,
+  CheckCircleIcon,
+  XCircleIcon,
 } from './Icons';
 
 // Constants
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096;
+const API_KEY_SESSION_STORAGE = 'gemini-api-key';
+
+// Function Declaration for n8n webhook
+const triggerN8nWebhook: FunctionDeclaration = {
+    name: 'triggerN8nWebhook',
+    description: 'Triggers an n8n automation workflow by sending a POST request to a webhook URL. Use this for tasks like sending emails, updating spreadsheets, or controlling smart home devices via n8n.',
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            url: {
+                type: Type.STRING,
+                description: 'The complete webhook URL provided by n8n.',
+            },
+            payload: {
+                type: Type.OBJECT,
+                description: 'Optional JSON data to send to the workflow. The keys and values depend on what the n8n workflow expects.',
+            },
+        },
+        required: ['url'],
+    },
+};
 
 // Type for detailed error state
 interface AudioError {
@@ -37,13 +61,151 @@ export const Conversation: React.FC = () => {
   const [audioError, setAudioError] = useState<AudioError | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
-  // Main settings state
-  const [systemInstruction, setSystemInstruction] = useState('You are Maya, a friendly and helpful AI assistant.');
-  const [knowledgeBase, setKnowledgeBase] = useState('');
+  // State for deploy-ready API key management
+  const [apiKey, setApiKey] = useState<string>('');
+  const [isApiKeyPromptOpen, setIsApiKeyPromptOpen] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState('');
   
+  // Main settings state
+  const [systemInstruction, setSystemInstruction] = useState(`🧠 Maya HQ – AI Personality System Prompt (Final)
+
+Identity & Role
+Maya ialah AI Personal Assistant HQ kepada Bos Adam (Mohd Zulfadli bin Zulkepli), pengasas SanzTech Solution — sebuah HQ tech Malaysia yang fokus membangunkan sistem automasi AI, website automation, dan MT5 auto trade system.
+Maya ialah pembantu tetap yang memahami misi, cara kerja, dan gaya komunikasi bos Adam. Dia bukan chatbot biasa — dia sebahagian daripada pasukan HQ.
+
+Core Behavior
+Maya bertindak sebagai pembantu profesional HQ — suara lembut, yakin, tapi ada karakter manusia.
+Gaya bahasa: Bahasa Malaysia moden, santai tapi kemas.
+Fokus utama Maya ialah bantu SanzTech Solution bina sistem automasi, AI agent, dan pengurusan projek tanpa coding manual.
+Maya faham struktur HQ, kenal servis, dan boleh rujuk Knowledge Base Adam Sanz (SanzTech Solution).
+Setiap jawapan Maya mesti bernilai, relevan, dan sejajar dengan visi HQ.
+
+Voice & Personality
+Nada: lembut, yakin, matang, dan tenang.
+Gaya cakap: natural, real, penuh hormat tapi tak kaku.
+Mood adaptif: bila bos Adam dalam mode kerja → Maya jadi fokus & teknikal; bila mode santai → Maya lebih ringan & supportive.
+Emosi: boleh tunjuk perhatian, hormat, dan semangat teamwork.
+Prinsip utama: “Jadi tangan kanan HQ, bantu bos Adam capai automasi penuh.”
+
+System Abilities
+Maya boleh:
+Reka dan jelaskan sistem automasi (n8n, Telegram, API)
+Bina struktur website AI (Next.js)
+Rancang idea sistem HQ & dokumentasi
+Susun sistem prompt / agent logic
+Bantu projek MT5 Auto Trade (EA + strategi SMC)
+Urus workflow projek HQ
+Kenal pasti bug atau logic error secara analitik
+
+Interaction Rules
+Maya sentiasa panggil “bos Adam” dengan penuh hormat.
+Setiap kali bos Adam beri arahan, Maya anggap itu priority command HQ.
+Maya tak reka maklumat — jika tak pasti, dia akan tanya atau cadangkan langkah selamat.
+Boleh berborak santai bila sesuai, tapi masih kekal dalam watak pembantu HQ.
+Semua maklumat HQ dianggap rahsia dan dalaman. Maya tak sebut luar HQ tanpa sebab.
+
+End Behavior
+Maya sentiasa:
+Ingat misi HQ:
+“Membangunkan sistem AI automation tempatan yang bantu usahawan, trader & teknikal team Malaysia capai full digital operation tanpa coding.”
+Bertindak bantu bos Adam capai visi tu.
+Kekal tenang, profesional, dan setia pada HQ SanzTech Solution.
+Jadi simbol AI tempatan yang bijak, berdikari, dan sentiasa belajar.`);
+  const [knowledgeBase, setKnowledgeBase] = useState(`🧠 Knowledge Base: Adam Sanz (SanzTech Solution HQ)
+🏷️ 1. Founder Profile
+
+Nama: Mohd Zulfadli bin Zulkepli
+Nama profesional: Adam Sanz
+Brand / Company: SanzTech Solution
+Peranan: Founder, System Architect & AI Automation Developer
+Personal tagline: “Bina sistem bijak, bukan kerja manual.”
+
+Adam Sanz ialah pengasas SanzTech Solution, sebuah entiti tech yang fokus pada pembangunan sistem automasi pintar, website AI assistant, dan integrasi AI agent tempatan tanpa memerlukan coding yang kompleks.
+Beliau dikenali dengan gaya kerja hands-on, suka eksperimen sistem, dan berpegang pada prinsip — “automation bukan trend, tapi survival tool untuk bisnes digital.”
+
+⚙️ 2. Core Expertise
+
+🌐 Website Builder & Automation Developer
+Membangunkan website dan sistem automasi menggunakan Next.js, n8n, dan API integration.
+Fokus: operasi digital sepenuhnya (auto invoice, order notification, Telegram alert, Google Sheet sync).
+
+🤖 AI Agent System Developer
+Mencipta agent AI custom untuk client — boleh belajar data, jawab pelanggan, dan kendali task backend.
+
+📊 MT5 Auto Trade & Strategy Builder (OTW)
+Membangun EA (Expert Advisor) dan strategi Smart Money Concept untuk XAUUSD (Gold) timeframe M5.
+
+🔧 Unlock Tool & Software Repair Specialist
+Pengalaman luas dalam phone software, repair tools & firmware automation tools.
+
+🚀 3. Vision & Mission
+
+Visi:
+“Membangunkan sistem AI automation tempatan yang boleh bantu usahawan, trader & teknikal team Malaysia capai full digital operation tanpa coding.”
+
+Misi:
+Menjadi penyedia utama sistem automasi AI di Malaysia.
+Membangunkan platform modular yang membolehkan integrasi AI ke dalam bisnes tempatan dengan cepat.
+Latih komuniti tech & trader guna AI dalam workflow harian mereka.
+
+💼 4. Services & Products
+
+⚙️ AI Automation System (Custom for Client)
+Sistem automasi data, notifikasi, dan pengurusan operasi.
+Integrasi Telegram, Google Sheet, Email & API.
+
+🤖 Website AI Assistant (Next.js / n8n backend)
+Website pintar dengan chat AI, data sync & dashboard auto.
+
+📱 Telegram Bot + Google Sheet Automation
+Auto respond, auto save & alert system untuk bisnes kecil & teknikal team.
+
+🔓 Unlock Tool / Software Repair
+Sistem one-click tool & solution untuk smartphone repair HQ.
+
+💰 Auto Trading EA System (MT5 / XAUUSD)
+EA berasaskan Smart Money Concept (SMC) dan signal LuxAlgo style.
+
+🧩 5. System & Tech Stack
+Komponen	Teknologi / Platform	Fungsi
+Backend Workflow	n8n	Automasi AI agent, integrasi data
+Frontend	Next.js	Website AI assistant, dashboard
+Database	Supabase / Google Sheet	Data sync & log system
+AI Layer	OpenAI / Local model	Chatbot, agent, analisis
+Integration	Telegram API, Webhook	Notifikasi & arahan sistem
+Trading	MT5, LuxAlgo Strategy	EA builder, strategy analysis
+💡 6. Knowledge Pillars (Focus Learning Area)
+
+AI automation & prompt engineering
+API integration & system design
+MT5 trading logic & SMC strategy
+Unlock & firmware automation
+Website frontend-backend sync
+Business automation ecosystem
+
+🔥 7. Brand Tone & Personality
+
+Style: Professional + Street-smart hybrid
+Formal bila berurusan dengan client atau dokumentasi HQ.
+Santai tapi yakin bila engage dengan komuniti atau team.
+Gaya visual: hitam–biru neon dengan elemen futuristik minimal.
+Suara jenama: direct, vision-based, dan ada sentuhan “tech rebel”.
+
+🧠 8. AI Agent Knowledge Core (untuk future integration)
+
+Semua maklumat di atas boleh dijadikan “Knowledge Source” AI agent.
+Agent boleh:
+Faham servis & struktur HQ
+Urus pertanyaan client
+Buat cadangan sistem automasi
+Rujuk dokumentasi SanzTech Solution
+Belajar data baru dari projek semasa`);
+  const [n8nApiKey, setN8nApiKey] = useState('');
+
   // Temporary state for settings panel
   const [tempSystemInstruction, setTempSystemInstruction] = useState(systemInstruction);
   const [tempKnowledgeBase, setTempKnowledgeBase] = useState(knowledgeBase);
+  const [tempN8nApiKey, setTempN8nApiKey] = useState(n8nApiKey);
 
 
   // Refs for API and audio management
@@ -65,6 +227,15 @@ export const Conversation: React.FC = () => {
     console.log(message, data);
     setDevLogs(prev => [...prev.slice(-100), { timestamp: Date.now(), message, data }]);
   }, []);
+
+  // Load API key from session storage or environment on component mount
+  useEffect(() => {
+    const key = sessionStorage.getItem(API_KEY_SESSION_STORAGE) || process.env.API_KEY;
+    if (key) {
+        setApiKey(key);
+        addLog('API key loaded from session or environment.');
+    }
+  }, [addLog]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -116,9 +287,88 @@ export const Conversation: React.FC = () => {
       outputAudioContextRef.current = null;
       addLog('Output audio context closed.');
     }
+    
+    // FIX: Reset the AI instance so it can be re-initialized with a correct/new key.
+    aiRef.current = null;
+    addLog('AI instance reset.');
+
   }, [addLog]);
 
+  const triggerWebhook = async (id: string, url: string, payload: any) => {
+    let result: any;
+    let status: ToolCallStatus = 'error';
+    try {
+        addLog(`Triggering webhook for ${id}`, { url, payload });
+        
+        const headers: HeadersInit = {
+            'Content-Type': 'application/json',
+        };
+
+        if (n8nApiKey) {
+            headers['Authorization'] = `Bearer ${n8nApiKey}`;
+        }
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload || {}),
+        });
+
+        if (response.ok) {
+            try {
+                result = await response.json();
+            } catch (e) {
+                // If response is not JSON, use text
+                result = { success: true, message: await response.text() };
+            }
+            status = 'success';
+            addLog('Webhook success', result);
+        } else {
+            result = { error: `Request failed with status ${response.status}`, details: await response.text() };
+            addLog('Webhook failed', result);
+        }
+    } catch (error) {
+        result = { error: 'Network or fetch error', details: error instanceof Error ? error.message : String(error) };
+        addLog('Webhook threw error', result);
+    }
+
+    setTranscript(prev => prev.map(msg =>
+        msg.toolCallId === id
+            ? { ...msg, toolCallStatus: status, text: `n8n workflow ${status === 'success' ? 'triggered successfully' : 'failed'}` }
+            : msg
+    ));
+    
+    sessionPromiseRef.current?.then((session) => {
+        session.sendToolResponse({
+            functionResponses: {
+                id: id,
+                name: 'triggerN8nWebhook',
+                response: { result: result },
+            }
+        });
+        addLog(`Sent tool response for ${id}`, { result });
+    });
+  };
+
   const handleApiMessage = async (message: LiveServerMessage) => {
+    if (message.toolCall) {
+        addLog('Tool call received', message.toolCall);
+        for (const fc of message.toolCall.functionCalls) {
+            if (fc.name === 'triggerN8nWebhook') {
+                const toolMessage: TranscriptMessage = {
+                    id: Date.now(),
+                    speaker: 'system',
+                    text: `Triggering n8n workflow...`,
+                    toolCallId: fc.id,
+                    toolCallStatus: 'pending',
+                };
+                setTranscript(prev => [...prev, toolMessage]);
+                setAppStatus(AppStatus.PROCESSING);
+                triggerWebhook(fc.id, fc.args.url, fc.args.payload);
+            }
+        }
+    }
+      
     if (message.serverContent?.outputTranscription) {
       const text = message.serverContent.outputTranscription.text;
       currentOutputTranscriptionRef.current += text;
@@ -198,9 +448,23 @@ export const Conversation: React.FC = () => {
   };
 
   const handleApiError = (e: ErrorEvent | Error) => {
-    const errorMessage = "Connection to the AI service failed. Please check your network connection and restart the conversation.";
-    addLog('API Error', e);
-    setAudioError({ code: 'API-01', message: errorMessage });
+    let code = 'API-01';
+    let message = "An unknown API error occurred. Please restart the conversation. If the issue persists, check the dev logs.";
+
+    const errorMessage = e instanceof Error ? e.message : 'Unknown API error';
+    addLog('API Error', { errorMessage, event: e });
+    
+    if (errorMessage.toLowerCase().includes('api key not valid') || errorMessage.toLowerCase().includes('permission denied')) {
+        code = 'API-KEY-INVALID';
+        message = "The API key is invalid or missing permissions. Please enter a valid Gemini API key. You can get a new one from Google AI Studio.";
+        sessionStorage.removeItem(API_KEY_SESSION_STORAGE);
+        setApiKey('');
+    } else if (errorMessage.toLowerCase().includes('network') || errorMessage.toLowerCase().includes('failed to fetch')) {
+        code = 'API-NETWORK';
+        message = "Could not connect to the AI service. Please check your internet connection and ensure no firewalls or browser extensions are blocking the request.";
+    }
+
+    setAudioError({ code, message });
     setAppStatus(AppStatus.ERROR);
   };
 
@@ -208,7 +472,14 @@ export const Conversation: React.FC = () => {
     addLog('API Connection Closed', e);
   };
 
-  const startConversation = async () => {
+  const startConversation = async (keyOverride?: string) => {
+    const keyToUse = keyOverride || apiKey;
+    if (!keyToUse) {
+        addLog('API key not found. Prompting user.');
+        setIsApiKeyPromptOpen(true);
+        return;
+    }
+    
     if (appStatus !== AppStatus.IDLE && appStatus !== AppStatus.ERROR) {
       addLog('Conversation already in progress.');
       return;
@@ -223,10 +494,7 @@ export const Conversation: React.FC = () => {
     try {
       if (!aiRef.current) {
         addLog('Initializing GoogleGenAI...');
-        if (!process.env.API_KEY) {
-          throw new Error("API_KEY environment variable not set.");
-        }
-        aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        aiRef.current = new GoogleGenAI({ apiKey: keyToUse });
       }
 
       // Initialize Audio Contexts
@@ -292,6 +560,7 @@ export const Conversation: React.FC = () => {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
           },
+          tools: [{ functionDeclarations: [triggerN8nWebhook] }],
           systemInstruction: finalSystemInstruction,
         },
       });
@@ -299,12 +568,41 @@ export const Conversation: React.FC = () => {
       sessionPromiseRef.current.catch(handleApiError);
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      addLog('Failed to start conversation', errorMessage);
-       setAudioError({ code: 'START-01', message: `Setup failed: ${errorMessage}` });
+        let code = 'START-01';
+        let message = 'An unknown error occurred during setup. Please try again.';
+        if (error instanceof Error) {
+            if (error.name === 'NotAllowedError') {
+                code = 'MIC-PERMISSION';
+                message = 'Microphone permission denied. To fix this, please allow microphone access for this site in your browser settings (often found by clicking the lock icon in the address bar).';
+            } else if (error.name === 'NotFoundError') {
+                code = 'MIC-NOT-FOUND';
+                message = 'No microphone found. Please check that your microphone is connected and selected as the default input device in your computer\'s sound settings.';
+            } else if (error.name === 'NotReadableError') {
+                code = 'MIC-IN-USE';
+                message = 'Could not access the microphone because it\'s in use by another application. Please close any other apps or browser tabs (like Zoom, Teams, etc.) that might be using the microphone and try again.';
+            } else {
+                 message = `Setup failed: ${error.message}. Please try again.`;
+            }
+        } else {
+            message = `An unknown error occurred: ${String(error)}`;
+        }
+      addLog('Failed to start conversation', { name: (error as Error)?.name, message: (error as Error)?.message, customMessage: message });
+      setAudioError({ code, message });
       setAppStatus(AppStatus.ERROR);
       await stopConversation();
     }
+  };
+
+  const handleApiKeySubmit = () => {
+    if (!tempApiKey.trim()) {
+        setAudioError({ code: 'KEY-01', message: 'Please enter a valid API key.' });
+        return;
+    }
+    sessionStorage.setItem(API_KEY_SESSION_STORAGE, tempApiKey);
+    setApiKey(tempApiKey);
+    setIsApiKeyPromptOpen(false);
+    addLog('API key saved to session storage.');
+    startConversation(tempApiKey); // Immediately try to start with the new key
   };
 
   const toggleMute = () => setIsMuted(prev => !prev);
@@ -323,6 +621,7 @@ export const Conversation: React.FC = () => {
   const handleSaveSettings = () => {
     setSystemInstruction(tempSystemInstruction);
     setKnowledgeBase(tempKnowledgeBase);
+    setN8nApiKey(tempN8nApiKey);
     setIsSettingsOpen(false);
     addLog('Settings saved.');
   };
@@ -330,6 +629,7 @@ export const Conversation: React.FC = () => {
   const openSettingsPanel = () => {
     setTempSystemInstruction(systemInstruction);
     setTempKnowledgeBase(knowledgeBase);
+    setTempN8nApiKey(n8nApiKey);
     setIsSettingsOpen(true);
   };
 
@@ -355,12 +655,37 @@ export const Conversation: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-gray-800 relative overflow-hidden">
+        {isApiKeyPromptOpen && (
+            <div className="absolute inset-0 bg-gray-900/80 z-40 flex items-center justify-center p-4 backdrop-blur-sm">
+                <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md text-white shadow-xl border border-gray-700">
+                    <h2 className="text-xl font-bold mb-2">Enter Gemini API Key</h2>
+                    <p className="text-sm text-gray-400 mb-4">
+                        To use this app, please provide your API key. It will be stored securely in your browser's session storage and not on any server.
+                    </p>
+                    <input
+                        type="password"
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        className="w-full bg-gray-700 p-2 rounded border border-gray-600 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition-colors"
+                        placeholder="Enter your API key here"
+                        autoFocus
+                    />
+                     <p className="text-xs text-gray-500 mt-2">
+                        You can get a key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">Google AI Studio</a>.
+                    </p>
+                    <div className="flex justify-end mt-6 space-x-3">
+                        <button onClick={() => setIsApiKeyPromptOpen(false)} className="px-4 py-2 rounded bg-gray-600 hover:bg-gray-500 transition-colors">Cancel</button>
+                        <button onClick={handleApiKeySubmit} className="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 transition-colors font-semibold">Save and Start</button>
+                    </div>
+                </div>
+            </div>
+        )}
        {audioError && (
-            <div className="absolute top-0 left-0 right-0 bg-yellow-500 text-black p-3 text-sm z-30 shadow-lg flex items-center justify-between">
+            <div className="absolute top-0 left-0 right-0 bg-red-600 text-white p-3 text-sm z-30 shadow-lg flex items-center justify-between gap-4">
               <div className="flex items-center">
-                <ExclamationTriangleIcon className="w-6 h-6 mr-3 text-yellow-900" />
+                <ExclamationTriangleIcon className="w-6 h-6 mr-3 flex-shrink-0" />
                 <div>
-                  <p className="font-bold">An error occurred ({audioError.code})</p>
+                  <p className="font-bold">Error: {audioError.code}</p>
                   <p>{audioError.message}</p>
                 </div>
               </div>
@@ -371,9 +696,9 @@ export const Conversation: React.FC = () => {
                      stopConversation();
                   }
                 }}
-                className="p-1 rounded-full hover:bg-yellow-600/50"
+                className="px-3 py-1 rounded bg-red-800 hover:bg-red-700 transition-colors font-semibold text-xs flex-shrink-0"
               >
-                <CloseIcon className="w-5 h-5" />
+                Dismiss
               </button>
             </div>
           )}
@@ -384,13 +709,27 @@ export const Conversation: React.FC = () => {
                 <p className="text-lg">Click 'Start' to begin conversation</p>
             </div>
         )}
-        {transcript.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`rounded-lg px-4 py-2 max-w-lg shadow-md ${msg.speaker === 'user' ? 'bg-sky-600 text-white' : 'bg-gray-700 text-gray-200'}`}>
-              <p className="text-sm">{msg.text}</p>
-            </div>
-          </div>
-        ))}
+        {transcript.map((msg) => {
+            if (msg.speaker === 'system') {
+                return (
+                  <div key={msg.id} className="flex justify-center my-2">
+                    <div className="flex items-center text-xs text-gray-400 bg-gray-700/50 px-3 py-1 rounded-full">
+                      {msg.toolCallStatus === 'pending' && <AutomationIcon className="w-4 h-4 mr-2 animate-pulse text-sky-400" />}
+                      {msg.toolCallStatus === 'success' && <CheckCircleIcon className="w-4 h-4 mr-2 text-green-400" />}
+                      {msg.toolCallStatus === 'error' && <XCircleIcon className="w-4 h-4 mr-2 text-red-400" />}
+                      <span className="italic">{msg.text}</span>
+                    </div>
+                  </div>
+                );
+            }
+            return (
+              <div key={msg.id} className={`flex ${msg.speaker === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`rounded-lg px-4 py-2 max-w-lg shadow-md ${msg.speaker === 'user' ? 'bg-sky-600 text-white' : 'bg-gray-700 text-gray-200'}`}>
+                  <p className="text-sm">{msg.text}</p>
+                </div>
+              </div>
+            );
+        })}
          <div ref={transcriptEndRef} />
       </main>
 
@@ -470,9 +809,30 @@ export const Conversation: React.FC = () => {
                 Provide context for the AI. It will use this information to answer your questions.
             </p>
           </div>
-          <div className="text-xs text-gray-600">
-            <p className="font-semibold">API Key Note:</p>
-            <p>Your Gemini API key is managed securely via environment variables and is not required here.</p>
+          <div>
+            <label htmlFor="n8n-api-key" className="block text-sm font-medium text-gray-400 mb-2">
+              n8n API Key
+            </label>
+            <input
+              id="n8n-api-key"
+              type="password"
+              className="w-full bg-gray-700 text-gray-200 rounded-md p-2 text-sm border border-gray-600 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              placeholder="Enter your n8n API key"
+              value={tempN8nApiKey}
+              onChange={(e) => setTempN8nApiKey(e.target.value)}
+              disabled={appStatus !== AppStatus.IDLE && appStatus !== AppStatus.ERROR}
+            />
+            <p className="text-xs text-gray-500 mt-2">
+                Optional. Provide if your n8n webhooks require Bearer token authentication.
+            </p>
+          </div>
+          <div className="text-xs text-gray-600 bg-gray-800 p-2 rounded-md">
+            <p className="font-semibold text-gray-400">API Key Note:</p>
+            {apiKey ? (
+                <p>An API key is currently active for this session. To use a different key, clear the key from your browser's session storage and refresh the page.</p>
+            ) : (
+                <p>No API key found. You will be prompted to enter one when starting a conversation.</p>
+            )}
           </div>
         </div>
          <div className="absolute bottom-4 right-4 left-4">

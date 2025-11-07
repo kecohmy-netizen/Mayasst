@@ -7,10 +7,14 @@ export enum AppStatus {
   ERROR = 'ERROR',
 }
 
+export type ToolCallStatus = 'pending' | 'success' | 'error';
+
 export interface TranscriptMessage {
   id: number; // Use timestamp as a unique ID
-  speaker: 'user' | 'model';
+  speaker: 'user' | 'model' | 'system';
   text: string;
+  toolCallId?: string;
+  toolCallStatus?: ToolCallStatus;
 }
 
 export interface DevLogMessage {
