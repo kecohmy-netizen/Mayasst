@@ -1,0 +1,7 @@
+{
+  "name": "maya persornal assistant",
+  "description": "An application that allows users to have a real-time voice conversation with the Gemini 2.5 Native Audio (Live API). It captures microphone input, streams it to Gemini, and plays back the audio response, displaying a live transcript.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
